@@ -39,7 +39,7 @@ func TestJSONModePlainProseIsDisplayed(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := llm.NewClient(srv.URL, "", "m", 0, 5*time.Second, true, "")
-	ag := New(cfg, client, tool.NewRegistry(root), ui.New())
+	ag := New(&cfg, client, tool.NewRegistry(root), ui.New())
 
 	if err := ag.Run(context.Background(), "say you are done"); err != nil {
 		t.Fatal(err)

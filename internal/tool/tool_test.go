@@ -150,8 +150,8 @@ func TestRunCommand(t *testing.T) {
 func TestRegistrySpecs(t *testing.T) {
 	r := NewRegistry(t.TempDir())
 	specs := r.Specs()
-	if len(specs) != 12 {
-		t.Fatalf("got %d specs, want 12", len(specs))
+	if len(specs) != 13 {
+		t.Fatalf("got %d specs, want 13", len(specs))
 	}
 	for _, s := range specs {
 		var js map[string]any

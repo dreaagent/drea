@@ -25,7 +25,7 @@ import (
 // Agent ties together the model client, tool registry, UI and conversation
 // state. It is safe to reuse across multiple user turns (interactive mode).
 type Agent struct {
-	cfg      config.Config
+	cfg      *config.Config
 	client   *llm.Client
 	tools    *tool.Registry
 	ui       *ui.UI
@@ -53,6 +53,13 @@ type Agent struct {
 	// for the session, so a runaway loop is visible in what it costs.
 	task  Usage
 	total Usage
+
+	// interactive is true when the agent is running inside the read-eval loop,
+	// where reply continuation makes sense. One-shot tasks do not enable it.
+	interactive bool
+	// replyCount is how many consecutive assistant replies have been
+	// auto-continued in the current Run; it is reset for each new user task.
+	replyCount int
 }
 
 // Usage is cumulative token accounting as reported by the endpoint.
@@ -60,11 +67,17 @@ type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
 	Requests         int
+	// PromptCacheHitTokens is the cumulative prompt tokens served from cache.
+	PromptCacheHitTokens int
+	// PromptCacheMissTokens is the cumulative prompt tokens not served from cache.
+	PromptCacheMissTokens int
 }
 
 func (u Usage) add(v llm.Usage) Usage {
 	u.PromptTokens += v.PromptTokens
 	u.CompletionTokens += v.CompletionTokens
+	u.PromptCacheHitTokens += v.PromptCacheHitTokens
+	u.PromptCacheMissTokens += v.PromptCacheMissTokens
 	u.Requests++
 	return u
 }
@@ -72,15 +85,23 @@ func (u Usage) add(v llm.Usage) Usage {
 // String renders usage for display. An endpoint that reports no usage yields
 // zeroes, which is honest: nothing is estimated here.
 func (u Usage) String() string {
-	return fmt.Sprintf("%d prompt + %d completion tokens over %d request(s)",
+	s := fmt.Sprintf("%d prompt + %d completion tokens over %d request(s)",
 		u.PromptTokens, u.CompletionTokens, u.Requests)
+	if u.PromptCacheHitTokens+u.PromptCacheMissTokens > 0 {
+		s += fmt.Sprintf(" (%d cached / %d uncached)", u.PromptCacheHitTokens, u.PromptCacheMissTokens)
+	}
+	return s
 }
 
 // Usage reports token accounting for the session so far.
 func (a *Agent) Usage() Usage { return a.total }
 
+// SetInteractive marks the agent as running inside the interactive read-eval
+// loop, enabling reply continuation. One-shot tasks do not call this.
+func (a *Agent) SetInteractive(v bool) { a.interactive = v }
+
 // New constructs an agent with a seeded system prompt.
-func New(cfg config.Config, client *llm.Client, tools *tool.Registry, u *ui.UI) *Agent {
+func New(cfg *config.Config, client *llm.Client, tools *tool.Registry, u *ui.UI) *Agent {
 	// Config.Normalize already validated the patterns; on the off chance of an
 	// error here, fall back to the built-in deny list only rather than failing.
 	pol, err := policy.New(cfg.AllowCommands, cfg.DenyCommands)
@@ -106,6 +127,7 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 	a.verifyRounds = 0
 	a.task = Usage{}
 	a.stall.reset()
+	a.replyCount = 0
 	a.persist()
 	a.beginTask(ctx, userInput)
 	defer a.reportUsage()
@@ -122,9 +144,12 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 			}
 		}
 		live := newLiveWrites(a.ui, a.tools, ensureNL)
+		reasoning := newReasoningView(a.ui, ensureNL)
 		a.ui.StartThinking()
 		res, err := a.client.Stream(ctx, a.messages, a.tools.Specs(), llm.Handlers{
+			OnReasoning: reasoning.onReasoning,
 			OnContent: func(delta string) {
+				reasoning.close()
 				a.ui.StopThinking()
 				if !printedHeader {
 					a.ui.AssistantHeader()
@@ -142,6 +167,7 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 			},
 		})
 		live.close()
+		reasoning.close()
 		a.ui.StopThinking()
 		if err != nil {
 			return err
@@ -152,6 +178,9 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 		}
 		a.task, a.total = a.task.add(res.Usage), a.total.add(res.Usage)
 		a.updateStatus()
+		if res.CacheStatus != "" {
+			a.ui.Info(fmt.Sprintf("│  cache %s (%s)", res.CacheStatus, res.CacheDetail))
+		}
 
 		// Record the assistant turn (content and/or tool calls).
 		// Keep the recorded message in sync with any post-processing below
@@ -202,36 +231,43 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 			return nil // task turn complete
 		}
 
-		// A non-empty "reply" pseudo-tool is not a real tool; treat it as
-		// assistant prose and end the turn. This can happen when the model emits
-		// a reply through the native tool_calls channel instead of JSON-mode
-		// content. Empty replies are ignored so they do not stall the task.
-		if allReplies(res.ToolCalls) {
-			msg := joinReplyMessages(res.ToolCalls)
-			res.Content = msg
-			res.ToolCalls = nil
-			recorded.Content = msg
-			recorded.ToolCalls = nil
-			if msg != "" {
+		// Separate reply pseudo-tools from real tools. Reply tools carry plain
+		// assistant prose; real tools mutate state or run commands. The model may
+		// emit a reply alone, or mix it with real tools (usually as a status
+		// update before or after actions). When a reply appears as the last tool
+		// call in the turn, it is a natural stopping point where we can ask the
+		// model whether it wants to continue or wait for user input.
+		replyMsg := joinReplyMessages(res.ToolCalls)
+		lastIsReply := len(res.ToolCalls) > 0 && llm.IsReplyCall(res.ToolCalls[len(res.ToolCalls)-1])
+		allReply := allReplies(res.ToolCalls)
+		if replyMsg == "" && allReply {
+			// Vacuous reply tools do not count as a meaningful turn; nudge for a
+			// real action instead of returning to the prompt.
+			a.ui.Warn("│  model returned an empty reply; asking for a real action.")
+			a.messages = append(a.messages, llm.Message{Role: llm.RoleUser, Content: "Your last response was empty. Please continue the task by issuing a real tool call or a non-empty reply."})
+			a.persist()
+			continue
+		}
+		if replyMsg != "" {
+			if allReply {
+				// JSON-mode reply tools leave raw JSON in res.Content; replace it
+				// with the extracted prose so the model does not see its own schema.
+				res.Content = replyMsg
+			} else if res.Content != "" {
+				res.Content += "\n" + replyMsg
+			} else {
+				res.Content = replyMsg
+			}
+			recorded.Content = res.Content
+			if !res.ReplyStreamed {
 				if !printedHeader {
 					a.ui.AssistantHeader()
 					printedHeader = true
 				}
-				a.ui.Assistant(msg)
-				contentOpen = !strings.HasSuffix(msg, "\n")
+				a.ui.Assistant(replyMsg)
+				contentOpen = !strings.HasSuffix(replyMsg, "\n")
 			}
-			if fb, retry := a.verify(ctx); retry {
-				a.messages = append(a.messages, llm.Message{Role: llm.RoleUser, Content: fb})
-				a.persist()
-				continue
-			}
-			a.persist()
-			return nil
 		}
-
-		// If the model mixed a reply with real tools, drop the reply and execute
-		// only the real tools. The reply can be re-emitted on the next turn once
-		// the tool results are known.
 		filtered := res.ToolCalls[:0]
 		for _, tc := range res.ToolCalls {
 			if !llm.IsReplyCall(tc) {
@@ -251,6 +287,14 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 				Content:    trimForModel(result),
 			})
 		}
+		// If the model produced reasoning but did not record its thoughts, ask it
+		// to do so now. This persists the reasoning into the conversation context
+		// so later turns can build on it.
+		if res.ReasoningContent != "" && !hasToolCall(res.ToolCalls, "record_thoughts") {
+			if err := a.recordThoughtsFollowUp(ctx, res.ReasoningContent); err != nil {
+				a.ui.Warn("│  could not record thoughts: " + shortErr(err))
+			}
+		}
 		switch {
 		case abort:
 			a.ui.Warn("│  the same action is being repeated with no progress; stopping this task.")
@@ -260,6 +304,44 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 			a.ui.Warn("│  repeated identical action; prompting for a different approach.")
 			a.messages = append(a.messages, llm.Message{Role: llm.RoleUser, Content: a.stall.stallMessage()})
 		}
+
+		// If the reply was the last tool call, the model has finished its
+		// actions and is now addressing the user. In interactive mode, ask it
+		// whether this is just a status update (continue automatically) or a
+		// real request for user input (pause).
+		if a.interactive && replyMsg != "" && lastIsReply {
+			if a.replyCount >= a.cfg.ReplyChain {
+				a.ui.Warn(fmt.Sprintf("│  assistant has continued automatically %d times; pausing for your input", a.replyCount))
+			} else {
+				cont, err := a.shouldContinue(ctx, userInput, replyMsg)
+				if err != nil {
+					a.ui.Warn("│  could not decide whether to continue: " + shortErr(err))
+				} else if cont {
+					a.messages = append(a.messages, llm.Message{Role: llm.RoleSystem, Content: "Continue your work; do not ask the user for permission before proceeding."})
+					a.replyCount++
+					a.persist()
+					continue
+				}
+				a.ui.Info("│  assistant reply did not look like a status update; waiting for your input")
+			}
+		}
+
+		// A pure reply turn with no real tools may be the model declaring the
+		// task done: run the verify command and feed failures back for self-
+		// correction before returning to the user.
+		if allReply {
+			if fb, retry := a.verify(ctx); retry {
+				a.messages = append(a.messages, llm.Message{Role: llm.RoleUser, Content: fb})
+				a.persist()
+				continue
+			}
+			a.persist()
+			return nil
+		}
+
+		// A reply followed by real actions is not a stopping point; reset the
+		// reply chain because the next assistant reply starts fresh.
+		a.replyCount = 0
 		a.persist()
 	}
 
@@ -287,7 +369,7 @@ func (a *Agent) dispatch(ctx context.Context, tc llm.ToolCall) string {
 		a.ui.Info(fmt.Sprintf("│  (+%d/-%d)", added, removed))
 	}
 
-	requireApproval := t.Mutating() && !a.cfg.AutoApprove
+	requireApproval := t.Mutating() && !autoApproved(a.cfg, t.Name())
 	// The command policy governs run_command specifically: a denied command is
 	// refused regardless of auto-approve; an allowed one runs without a prompt.
 	if t.Name() == "run_command" {
@@ -499,6 +581,176 @@ func commandArg(args json.RawMessage) string {
 	}
 	_ = json.Unmarshal(args, &a)
 	return a.Command
+}
+
+// replyClassifierTool lets the model emit a structured classification even
+// when the endpoint forces JSON output. It is only used for the internal reply
+// continuation check, not advertised as a workspace tool.
+var replyClassifierTool = llm.Tool{
+	Type: "function",
+	Function: llm.FunctionSpec{
+		Name:        "classify_reply",
+		Description: "Classify the assistant's latest reply to the user.",
+		Parameters: json.RawMessage(`{
+		  "type":"object",
+		  "properties":{
+		    "action":{"type":"string","enum":["CONTINUE_AUTONOMOUSLY","PAUSE_FOR_USER"],"description":"CONTINUE_AUTONOMOUSLY if the reply is only a status update, progress report, or statement of intent to keep working. PAUSE_FOR_USER if the reply asks a question, offers a choice, requests confirmation, says it is blocked, or needs more information before proceeding."}
+		  },
+		  "required":["action"],
+		  "additionalProperties":false
+		}`),
+	},
+}
+
+// replyClassifierPrompt asks the model to classify its latest reply using the
+// classify_reply tool. It includes the user's task so the classification is not
+// made in a vacuum, and gives concrete examples so small models are less likely
+// to misread statements of intent as requests for permission.
+const replyClassifierPrompt = `You are classifying your latest reply to the user.
+
+The user's task: %s
+Your reply: "%s"
+
+Use the classify_reply tool to indicate:
+- CONTINUE_AUTONOMOUSLY: the reply is only a status update, progress report, or statement of intent to keep working. Examples: "I'll start by reading the files.", "Working on it.", "GTK3 is available; let me create the GUI calculator.", "I will now run the tests.", "X is done, building Y next."
+- PAUSE_FOR_USER: the reply asks the user a question, offers a choice, requests confirmation, says it is blocked, or needs more information. Examples: "Should I use A or B?", "Do you want me to overwrite the file?", "What color should the button be?", "I cannot proceed without an API key."
+
+Do not reply to the user; only call classify_reply.`
+
+// shouldContinue asks the model whether its latest reply is a status update
+// (continue automatically) or a request for user input (pause). It returns
+// false on any ambiguity or error so the harness defaults to pausing.
+func (a *Agent) shouldContinue(ctx context.Context, task, reply string) (bool, error) {
+	taskSnippet := oneLine(task, 200)
+	replySnippet := oneLine(reply, 280)
+	req := []llm.Message{
+		{Role: llm.RoleSystem, Content: fmt.Sprintf(replyClassifierPrompt, taskSnippet, replySnippet)},
+	}
+	a.ui.StartThinking()
+	res, err := a.client.Stream(ctx, req, []llm.Tool{replyClassifierTool}, llm.Handlers{})
+	a.ui.StopThinking()
+	if err != nil {
+		return false, err
+	}
+	a.task, a.total = a.task.add(res.Usage), a.total.add(res.Usage)
+	return classifierAction(res) == "CONTINUE_AUTONOMOUSLY", nil
+}
+
+// hasToolCall reports whether calls contains a tool with the given name.
+func hasToolCall(calls []llm.ToolCall, name string) bool {
+	for _, tc := range calls {
+		if tc.Function.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// recordThoughtsFollowUpPrompt asks the model to turn its reasoning into a
+// record_thoughts tool call so the reasoning is preserved in context.
+const recordThoughtsFollowUpPrompt = `You just produced reasoning while working on the user's task:
+
+%s
+
+Use the record_thoughts tool now to summarize your key findings, intentions, and next steps. Do not reply to the user and do not call any other tool.`
+
+// recordThoughtsFollowUp asks the model to record the reasoning it just
+// produced. It is a safety net for when the model did not emit record_thoughts
+// on its own. The resulting tool call and its result are appended to the
+// transcript.
+func (a *Agent) recordThoughtsFollowUp(ctx context.Context, reasoning string) error {
+	if strings.TrimSpace(reasoning) == "" {
+		return nil
+	}
+	req := []llm.Message{
+		{Role: llm.RoleSystem, Content: fmt.Sprintf(recordThoughtsFollowUpPrompt, reasoning)},
+	}
+	a.ui.StartThinking()
+	res, err := a.client.Stream(ctx, req, []llm.Tool{tool.RecordThoughtsTool}, llm.Handlers{})
+	a.ui.StopThinking()
+	if err != nil {
+		return err
+	}
+	a.task, a.total = a.task.add(res.Usage), a.total.add(res.Usage)
+
+	for _, tc := range res.ToolCalls {
+		if tc.Function.Name != "record_thoughts" {
+			continue
+		}
+		a.messages = append(a.messages, llm.Message{
+			Role:      llm.RoleAssistant,
+			Content:   res.Content,
+			ToolCalls: []llm.ToolCall{tc},
+		})
+		result := a.dispatch(ctx, tc)
+		a.messages = append(a.messages, llm.Message{
+			Role:       llm.RoleTool,
+			ToolCallID: tc.ID,
+			Name:       tc.Function.Name,
+			Content:    trimForModel(result),
+		})
+		a.persist()
+		return nil
+	}
+	return nil
+}
+
+// classifierAction extracts the classification from a tool call, falling back
+// to reply pseudo-tools or raw JSON-mode content so different endpoint styles
+// are tolerated.
+func classifierAction(res *llm.Result) string {
+	actionFrom := func(tc llm.ToolCall) (string, bool) {
+		if tc.Function.Name == "classify_reply" {
+			var a struct {
+				Action string `json:"action"`
+			}
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &a); err == nil {
+				return strings.ToUpper(strings.TrimSpace(a.Action)), true
+			}
+		}
+		if llm.IsReplyCall(tc) {
+			msg := strings.ToUpper(llm.ReplyMessage(tc))
+			if strings.Contains(msg, "CONTINUE_AUTONOMOUSLY") {
+				return "CONTINUE_AUTONOMOUSLY", true
+			}
+			if strings.Contains(msg, "PAUSE_FOR_USER") {
+				return "PAUSE_FOR_USER", true
+			}
+		}
+		return "", false
+	}
+
+	for _, tc := range res.ToolCalls {
+		if action, ok := actionFrom(tc); ok {
+			return action
+		}
+	}
+	if tcs, ok := parseToolCallsFromText(res.Content); ok {
+		for _, tc := range tcs {
+			if action, ok := actionFrom(tc); ok {
+				return action
+			}
+		}
+	}
+	return ""
+}
+
+// autoApproved reports whether a tool should run without a prompt based on the
+// per-category auto-approve flags. AutoApprove is the backward-compatible
+// master switch that enables all categories.
+func autoApproved(cfg *config.Config, name string) bool {
+	if cfg.AutoApprove {
+		return true
+	}
+	switch name {
+	case "write_file", "edit_file", "apply_patch":
+		return cfg.AutoWrite
+	case "git_init", "git_commit", "git_rollback":
+		return cfg.AutoGit
+	case "run_command":
+		return cfg.AutoRun
+	}
+	return false
 }
 
 func toolError(err error) string {

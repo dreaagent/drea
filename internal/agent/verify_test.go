@@ -25,7 +25,7 @@ func newTestAgent(t *testing.T, verify string) *Agent {
 	if err := cfg.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	return New(cfg, nil, tool.NewRegistry(cfg.Workdir), ui.New())
+	return New(&cfg, nil, tool.NewRegistry(cfg.Workdir), ui.New())
 }
 
 func TestVerifyPassIsNotRetried(t *testing.T) {

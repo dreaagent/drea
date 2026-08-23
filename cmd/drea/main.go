@@ -72,6 +72,10 @@ func run() error {
 		ReasoningEffort: saved.ReasoningEffort,
 		AllowCommands:   saved.AllowCommands,
 		DenyCommands:    saved.DenyCommands,
+		AutoWrite:       saved.AutoWrite,
+		AutoGit:         saved.AutoGit,
+		AutoRun:         saved.AutoRun,
+		ReplyChain:      saved.ReplyChain,
 	})
 
 	var resume bool
@@ -79,11 +83,16 @@ func run() error {
 	fs.Var((*stringList)(&cfg.AllowCommands), "allow", "regex for a run_command command to auto-run without a prompt (repeatable)")
 	fs.Var((*stringList)(&cfg.DenyCommands), "deny", "regex for a run_command command to block outright (repeatable)")
 	fs.StringVar(&cfg.Debug, "debug", cfg.Debug, "dump raw request/response traffic to a file (for debugging)")
+	fs.StringVar(&cfg.PromptCacheKey, "prompt-cache-key", cfg.PromptCacheKey, "send a prompt_cache_key with each request and keep the prefix stable; empty disables prompt caching")
 	fs.StringVar(&cfg.BaseURL, "base-url", cfg.BaseURL, "OpenAI-compatible API base URL")
 	fs.StringVar(&cfg.Model, "model", cfg.Model, "model name")
 	fs.StringVar(&cfg.APIKey, "key", cfg.APIKey, "API key (prefer DREA_API_KEY env var)")
 	fs.StringVar(&cfg.Workdir, "workdir", cfg.Workdir, "workspace root the agent is confined to")
-	fs.BoolVar(&cfg.AutoApprove, "auto", cfg.AutoApprove, "auto-approve commands and file writes (no confirmation)")
+	fs.BoolVar(&cfg.AutoApprove, "auto", cfg.AutoApprove, "auto-approve all mutating actions (write, git, run)")
+	fs.BoolVar(&cfg.AutoWrite, "auto-write", cfg.AutoWrite, "auto-approve write_file, edit_file and apply_patch")
+	fs.BoolVar(&cfg.AutoGit, "auto-git", cfg.AutoGit, "auto-approve git_init, git_commit and git_rollback")
+	fs.BoolVar(&cfg.AutoRun, "auto-run", cfg.AutoRun, "auto-approve run_command (command policy still applies)")
+	fs.IntVar(&cfg.ReplyChain, "reply-chain", cfg.ReplyChain, "max consecutive assistant replies auto-continued in interactive mode (default 15)")
 	fs.IntVar(&cfg.MaxSteps, "max-steps", cfg.MaxSteps, "maximum model turns per task")
 	fs.Float64Var(&cfg.Temperature, "temperature", cfg.Temperature, "sampling temperature")
 	fs.Float64Var(&cfg.TopP, "top-p", cfg.TopP, "nucleus-sampling probability")
@@ -106,10 +115,11 @@ func run() error {
 		fmt.Fprintln(os.Stderr, "\nFlags:")
 		fs.PrintDefaults()
 		fmt.Fprintln(os.Stderr, "\nEnvironment: DREA_BASE_URL, DREA_API_KEY (or OPENAI_API_KEY), DREA_MODEL, DREA_WORKDIR,")
-		fmt.Fprintln(os.Stderr, "             DREA_AUTO_APPROVE, DREA_VERIFY, DREA_VERIFY_ATTEMPTS, DREA_CHECKPOINT,")
+		fmt.Fprintln(os.Stderr, "             DREA_AUTO_APPROVE (all), DREA_AUTO_WRITE, DREA_AUTO_GIT, DREA_AUTO_RUN,")
+		fmt.Fprintln(os.Stderr, "             DREA_REPLY_CHAIN, DREA_VERIFY, DREA_VERIFY_ATTEMPTS, DREA_CHECKPOINT,")
 		fmt.Fprintln(os.Stderr, "             DREA_CONTEXT_TOKENS, DREA_NO_PERSIST, DREA_JSON_FORMAT, DREA_DEBUG,")
 		fmt.Fprintln(os.Stderr, "             DREA_ALLOW_COMMANDS, DREA_DENY_COMMANDS (newline-separated regexes),")
-		fmt.Fprintln(os.Stderr, "             DREA_REASONING_EFFORT")
+		fmt.Fprintln(os.Stderr, "             DREA_REASONING_EFFORT, DREA_PROMPT_CACHE_KEY")
 	}
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -119,6 +129,14 @@ func run() error {
 	}
 
 	cfg.JSONMode = !noJSONMode
+	// --auto is a master switch: it enables all per-category auto-approve flags.
+	// If a category flag was set explicitly without --auto, AutoApprove stays off
+	// so the existing single-field checks continue to default to prompting.
+	if cfg.AutoApprove {
+		cfg.AutoWrite = true
+		cfg.AutoGit = true
+		cfg.AutoRun = true
+	}
 	if err := cfg.Normalize(); err != nil {
 		return err
 	}
@@ -143,8 +161,9 @@ func run() error {
 
 	client := llm.NewClientWithReasoning(cfg.ChatURL(), cfg.APIKey, cfg.Model, cfg.Temperature, cfg.TopP, cfg.ReasoningEffort, cfg.RequestTimeout, cfg.JSONMode, cfg.JSONFormat)
 	client.SetDebug(cfg.Debug)
+	client.SetPromptCacheKey(cfg.PromptCacheKey)
 	tools := tool.NewRegistry(cfg.Workdir)
-	ag := agent.New(cfg, client, tools, u)
+	ag := agent.New(&cfg, client, tools, u)
 	objective = ag.Objective
 
 	if resume {
@@ -162,7 +181,7 @@ func run() error {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
-	u.Banner(cfg.Model, cfg.Workdir, cfg.AutoApprove)
+	u.Banner(cfg.Model, cfg.Workdir, cfg.AutoWrite, cfg.AutoGit, cfg.AutoRun)
 	u.SetStatus(0, cfg.ContextTokens)
 	u.SetStatusWorkdir(cfg.Workdir)
 	u.ShowStatus()
@@ -192,6 +211,7 @@ func taskContext(sigCh <-chan os.Signal) (context.Context, context.CancelFunc) {
 
 // interactive runs a read-eval loop, keeping conversation context across turns.
 func interactive(sigCh <-chan os.Signal, ag *agent.Agent, u *ui.UI, cfg *config.Config, client *llm.Client, tools *tool.Registry) error {
+	ag.SetInteractive(true)
 	u.Info("Interactive session. Type a task, /help for commands, or Ctrl-D to quit.")
 	for {
 		u.Prompt()
@@ -269,16 +289,7 @@ func command(line string, u *ui.UI, ag *agent.Agent, cfg *config.Config, client 
 		client.SetChatURL(cfg.ChatURL())
 		u.Info("host set to " + cfg.BaseURL)
 	case "auto":
-		switch arg {
-		case "on", "true", "yes":
-			cfg.AutoApprove = true
-		case "off", "false", "no":
-			cfg.AutoApprove = false
-		case "":
-		default:
-			u.Warn("usage: /auto [on|off]")
-		}
-		u.Info(fmt.Sprintf("auto-approve: %v", cfg.AutoApprove))
+		setAuto(u, cfg, arg)
 	case "verify":
 		if arg == "" {
 			if cfg.Verify == "" {
@@ -342,6 +353,24 @@ func command(line string, u *ui.UI, ag *agent.Agent, cfg *config.Config, client 
 		}
 		client.SetReasoningEffort(cfg.ReasoningEffort)
 		u.Info("reasoning effort set to " + cfg.ReasoningEffort)
+	case "cache-key":
+		if arg == "" || arg == "show" {
+			if cfg.PromptCacheKey == "" {
+				u.Info("cache-key: (unset)")
+			} else {
+				u.Info("cache-key: " + cfg.PromptCacheKey)
+			}
+			break
+		}
+		if arg == "off" || arg == "none" {
+			cfg.PromptCacheKey = ""
+			client.SetPromptCacheKey("")
+			u.Info("cache-key cleared")
+			break
+		}
+		cfg.PromptCacheKey = arg
+		client.SetPromptCacheKey(arg)
+		u.Info("cache-key set")
 	case "key":
 		if arg == "" || arg == "show" {
 			if cfg.APIKey == "" {
@@ -373,6 +402,11 @@ func command(line string, u *ui.UI, ag *agent.Agent, cfg *config.Config, client 
 			ReasoningEffort: cfg.ReasoningEffort,
 			AllowCommands:   cfg.AllowCommands,
 			DenyCommands:    cfg.DenyCommands,
+			PromptCacheKey:  cfg.PromptCacheKey,
+			AutoWrite:       cfg.AutoWrite,
+			AutoGit:         cfg.AutoGit,
+			AutoRun:         cfg.AutoRun,
+			ReplyChain:      cfg.ReplyChain,
 		})
 		if err != nil {
 			u.Error(err.Error())
@@ -405,10 +439,11 @@ const helpText = `commands:
   /config         show current configuration
   /model [name]   show or set the model
   /host [url]     show or set the API base URL
-  /auto [on|off]  show or toggle auto-approve
+  /auto [on|off|write|git|run]  show or toggle auto-approve (e.g. /auto write on)
   /verify [cmd]   show or set the verify command (/verify off to clear)
   /checkpoint [on|off]  show or toggle per-task checkpointing
   /reasoning [low|medium|high|off]  show or set the reasoning effort level
+  /cache-key [value|off|show]  show or set the prompt_cache_key; /save persists it
   /key [value|off|show]  show or set the API key (masked); /save persists it
   /multiline [on|off]  toggle multi-line input (Enter starts a new line; Ctrl-D sends)
   /usage          show token usage for this session
@@ -431,12 +466,14 @@ func showConfig(u *ui.UI, cfg *config.Config) {
 	u.Info(fmt.Sprintf("model:    %s", cfg.Model))
 	u.Info(fmt.Sprintf("host:     %s", cfg.BaseURL))
 	u.Info(fmt.Sprintf("workdir:  %s", cfg.Workdir))
-	u.Info(fmt.Sprintf("auto:     %v", cfg.AutoApprove))
+	u.Info(fmt.Sprintf("auto:     write=%v git=%v run=%v (master=%v)", cfg.AutoWrite, cfg.AutoGit, cfg.AutoRun, cfg.AutoApprove))
+	u.Info(fmt.Sprintf("reply:    chain=%d", cfg.ReplyChain))
 	u.Info(fmt.Sprintf("verify:   %s (up to %d self-correction attempts)", verify, cfg.VerifyAttempts))
 	u.Info(fmt.Sprintf("checkpt:  %v", cfg.Checkpoint))
 	u.Info(fmt.Sprintf("context:  %d tokens", cfg.ContextTokens))
 	u.Info(fmt.Sprintf("persist:  %v", cfg.Persist))
 	u.Info(fmt.Sprintf("json:     %s (mode: %v)", cfg.JSONFormat, cfg.JSONMode))
+	u.Info(fmt.Sprintf("cache:    %s", cacheKeyLabel(cfg.PromptCacheKey)))
 	u.Info(fmt.Sprintf("top-p:    %v", cfg.TopP))
 	reasoning := cfg.ReasoningEffort
 	if reasoning == "" {
@@ -451,6 +488,64 @@ func showConfig(u *ui.UI, cfg *config.Config) {
 
 // showPolicy prints the run_command allow/deny policy, including the built-in
 // deny list that is always in force.
+// setAuto handles the /auto slash command. With no argument it prints the
+// current state. "on"/"off" toggles the master switch and all categories.
+// "write", "git" or "run" followed by "on"/"off" toggles just that category.
+func setAuto(u *ui.UI, cfg *config.Config, arg string) {
+	fields := strings.Fields(arg)
+	if len(fields) == 0 {
+		u.Info(fmt.Sprintf("auto-approve: write=%v git=%v run=%v (master=%v)", cfg.AutoWrite, cfg.AutoGit, cfg.AutoRun, cfg.AutoApprove))
+		return
+	}
+	if len(fields) == 1 {
+		switch fields[0] {
+		case "on", "true", "yes":
+			cfg.AutoApprove = true
+			cfg.AutoWrite = true
+			cfg.AutoGit = true
+			cfg.AutoRun = true
+		case "off", "false", "no":
+			cfg.AutoApprove = false
+			cfg.AutoWrite = false
+			cfg.AutoGit = false
+			cfg.AutoRun = false
+		default:
+			u.Warn("usage: /auto [on|off|write|git|run] [on|off]")
+		}
+		u.Info(fmt.Sprintf("auto-approve: write=%v git=%v run=%v (master=%v)", cfg.AutoWrite, cfg.AutoGit, cfg.AutoRun, cfg.AutoApprove))
+		return
+	}
+	if len(fields) != 2 {
+		u.Warn("usage: /auto [on|off|write|git|run] [on|off]")
+		return
+	}
+	var target *bool
+	switch fields[0] {
+	case "write":
+		target = &cfg.AutoWrite
+	case "git":
+		target = &cfg.AutoGit
+	case "run":
+		target = &cfg.AutoRun
+	default:
+		u.Warn("usage: /auto [on|off|write|git|run] [on|off]")
+		return
+	}
+	switch fields[1] {
+	case "on", "true", "yes":
+		*target = true
+	case "off", "false", "no":
+		*target = false
+	default:
+		u.Warn("usage: /auto [on|off|write|git|run] [on|off]")
+		return
+	}
+	// If a category was toggled manually, keep the master switch reflecting
+	// whether everything is auto-approved.
+	cfg.AutoApprove = cfg.AutoWrite && cfg.AutoGit && cfg.AutoRun
+	u.Info(fmt.Sprintf("auto-approve: write=%v git=%v run=%v (master=%v)", cfg.AutoWrite, cfg.AutoGit, cfg.AutoRun, cfg.AutoApprove))
+}
+
 func showPolicy(u *ui.UI, cfg *config.Config) {
 	u.Info("run_command policy (deny wins; unmatched commands prompt as usual):")
 	if len(cfg.AllowCommands) == 0 {
@@ -494,4 +589,11 @@ func maskKey(k string) string {
 		return "set"
 	}
 	return "set (…" + k[len(k)-4:] + ")"
+}
+
+func cacheKeyLabel(k string) string {
+	if k == "" {
+		return "(unset)"
+	}
+	return k
 }

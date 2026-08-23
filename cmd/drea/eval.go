@@ -43,6 +43,7 @@ func runEval(args []string) error {
 		Verify:          saved.Verify,
 		ContextTokens:   saved.ContextTokens,
 		ReasoningEffort: saved.ReasoningEffort,
+		PromptCacheKey:  saved.PromptCacheKey,
 	})
 
 	u := ui.New()
@@ -66,9 +67,12 @@ func runOne(base config.Config, s eval.Spec, u *ui.UI) eval.Result {
 
 	cfg := base
 	cfg.Workdir = s.Workdir
-	cfg.AutoApprove = true // unattended
-	cfg.Persist = false    // eval runs are ephemeral
-	cfg.Verify = ""        // scored explicitly below, not inside the loop
+	cfg.AutoApprove = true // unattended: enable all categories
+	cfg.AutoWrite = true
+	cfg.AutoGit = true
+	cfg.AutoRun = true
+	cfg.Persist = false // eval runs are ephemeral
+	cfg.Verify = ""     // scored explicitly below, not inside the loop
 	if err := cfg.Normalize(); err != nil {
 		return eval.Result{Name: s.Name, Detail: "invalid workdir: " + err.Error()}
 	}
@@ -83,8 +87,9 @@ func runOne(base config.Config, s eval.Spec, u *ui.UI) eval.Result {
 	}
 
 	client := llm.NewClientWithReasoning(cfg.ChatURL(), cfg.APIKey, cfg.Model, cfg.Temperature, cfg.TopP, cfg.ReasoningEffort, cfg.RequestTimeout, cfg.JSONMode, cfg.JSONFormat)
+	client.SetPromptCacheKey(cfg.PromptCacheKey)
 	tools := tool.NewRegistry(cfg.Workdir)
-	ag := agent.New(cfg, client, tools, u)
+	ag := agent.New(&cfg, client, tools, u)
 	if err := ag.Run(ctx, s.Prompt); err != nil {
 		return eval.Result{Name: s.Name, Detail: "agent error: " + err.Error()}
 	}

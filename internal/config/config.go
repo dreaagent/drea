@@ -32,8 +32,16 @@ type Config struct {
 	// Workdir is the absolute root that all file tools are confined to.
 	Workdir string
 
-	// AutoApprove skips interactive confirmation before commands and writes.
+	// AutoApprove is a master switch that enables AutoWrite, AutoGit and
+	// AutoRun. It is kept for backward compatibility with --auto.
 	AutoApprove bool
+	// AutoWrite skips confirmation for write_file, edit_file and apply_patch.
+	AutoWrite bool
+	// AutoGit skips confirmation for git_init, git_commit and git_rollback.
+	AutoGit bool
+	// AutoRun skips confirmation for run_command (the command policy still
+	// applies on top: deny always wins, allow always skips the prompt).
+	AutoRun bool
 	// MaxSteps caps how many LLM turns a single task may take.
 	MaxSteps int
 	// Temperature is the sampling temperature forwarded to the endpoint.
@@ -90,6 +98,11 @@ type Config struct {
 	// transcript).
 	Persist bool
 
+	// ReplyChain is the maximum number of consecutive assistant replies that
+	// may be auto-continued in interactive mode before the harness pauses for
+	// user input. Zero means use the default.
+	ReplyChain int
+
 	// AllowCommands and DenyCommands are regular expressions applied to
 	// run_command commands. A command matching DenyCommands is refused
 	// outright (even with AutoApprove); one matching AllowCommands runs
@@ -101,6 +114,10 @@ type Config struct {
 
 	// Debug dumps raw request/response traffic to the given path when non-empty.
 	Debug string
+	// PromptCacheKey is a non-standard "prompt_cache_key" sent in chat
+	// requests. When set, the agent avoids rewriting older history (context
+	// compaction) so the cached prefix stays byte-identical across turns.
+	PromptCacheKey string
 }
 
 // Built-in fallbacks used when neither a saved setting, environment variable
@@ -117,6 +134,10 @@ const DefaultVerifyAttempts = 3
 // It is deliberately conservative so it fits comfortably inside common
 // context windows (e.g. 128k) while leaving room for the model's reply.
 const DefaultContextTokens = 96000
+
+// DefaultReplyChain is the maximum number of consecutive assistant replies
+// auto-continued in interactive mode before pausing for user input.
+const DefaultReplyChain = 15
 
 // Defaults returns a Config populated from (in decreasing precedence)
 // environment variables, the persisted settings file, the persisted API key
@@ -138,6 +159,10 @@ func Defaults(saved Saved) Config {
 		Model:           envOr("DREA_MODEL", firstNonEmpty(saved.Model, DefaultModel)),
 		Workdir:         envOr("DREA_WORKDIR", wd),
 		AutoApprove:     envBool("DREA_AUTO_APPROVE"),
+		AutoWrite:       envBool("DREA_AUTO_WRITE"),
+		AutoGit:         envBool("DREA_AUTO_GIT"),
+		AutoRun:         envBool("DREA_AUTO_RUN"),
+		ReplyChain:      envInt("DREA_REPLY_CHAIN", replyChain(saved)),
 		MaxSteps:        50,
 		Temperature:     1,
 		TopP:            0.95,
@@ -153,6 +178,7 @@ func Defaults(saved Saved) Config {
 		Persist:         !envBool("DREA_NO_PERSIST"),
 		AllowCommands:   envList("DREA_ALLOW_COMMANDS", saved.AllowCommands),
 		DenyCommands:    envList("DREA_DENY_COMMANDS", saved.DenyCommands),
+		PromptCacheKey:  envOr("DREA_PROMPT_CACHE_KEY", saved.PromptCacheKey),
 	}
 }
 
@@ -172,6 +198,11 @@ type Saved struct {
 	ReasoningEffort string
 	AllowCommands   []string
 	DenyCommands    []string
+	PromptCacheKey  string
+	AutoWrite       bool
+	AutoGit         bool
+	AutoRun         bool
+	ReplyChain      int
 }
 
 // Normalize validates the config and canonicalises paths. It must be called
@@ -231,6 +262,9 @@ func (c *Config) Normalize() error {
 	if _, err := policy.New(c.AllowCommands, c.DenyCommands); err != nil {
 		return fmt.Errorf("invalid command policy pattern: %w", err)
 	}
+	if c.ReplyChain <= 0 {
+		c.ReplyChain = DefaultReplyChain
+	}
 	if c.Debug != "" {
 		abs, err := filepath.Abs(c.Debug)
 		if err != nil {
@@ -261,6 +295,13 @@ func verifyAttempts(saved Saved) int {
 		return saved.VerifyAttempts
 	}
 	return DefaultVerifyAttempts
+}
+
+func replyChain(saved Saved) int {
+	if saved.ReplyChain > 0 {
+		return saved.ReplyChain
+	}
+	return DefaultReplyChain
 }
 
 func envOr(key, fallback string) string {

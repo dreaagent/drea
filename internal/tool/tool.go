@@ -44,6 +44,7 @@ type Registry struct {
 func NewRegistry(workdir string) *Registry {
 	r := &Registry{Root: workdir, tools: map[string]Tool{}}
 	r.add(&readFile{root: workdir})
+	r.add(&recordThoughts{})
 	r.add(&writeFile{root: workdir})
 	r.add(&editFile{root: workdir})
 	r.add(&applyPatch{root: workdir})

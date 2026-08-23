@@ -276,8 +276,9 @@ func (u *UI) paint(code, s string) string {
 	return code + s + reset
 }
 
-// Banner prints the startup banner with the active model and workdir.
-func (u *UI) Banner(model, workdir string, autoApprove bool) {
+// Banner prints the startup banner with the active model, workdir and the
+// current auto-approve categories.
+func (u *UI) Banner(model, workdir string, autoWrite, autoGit, autoRun bool) {
 	width := termWidth()
 	if width < 40 {
 		width = 40
@@ -292,16 +293,38 @@ func (u *UI) Banner(model, workdir string, autoApprove bool) {
 	fmt.Fprintln(u.out, u.paint(bold+magenta, title))
 	fmt.Fprintln(u.out, u.paint(dim, "  model   ")+model)
 	fmt.Fprintln(u.out, u.paint(dim, "  workdir ")+workdir)
-	mode := "confirm before commands & writes"
-	modeCode := dim
-	if autoApprove {
-		mode = "auto-approve (no confirmation)"
-		modeCode = yellow
-	}
-	fmt.Fprintln(u.out, u.paint(dim, "  safety  ")+u.paint(modeCode, mode))
+	fmt.Fprintln(u.out, u.paint(dim, "  safety  ")+u.paint(modeColor(autoWrite, autoGit, autoRun), safetyMode(autoWrite, autoGit, autoRun)))
 	fmt.Fprintln(u.out)
 	u.SetStatusWorkdir(workdir)
 	u.setLineStart(true)
+}
+
+// safetyMode renders a human-readable summary of which auto-approve categories
+// are active.
+func safetyMode(autoWrite, autoGit, autoRun bool) string {
+	if !autoWrite && !autoGit && !autoRun {
+		return "confirm before writes, git ops and commands"
+	}
+	var cats []string
+	if autoWrite {
+		cats = append(cats, "write")
+	}
+	if autoGit {
+		cats = append(cats, "git")
+	}
+	if autoRun {
+		cats = append(cats, "run")
+	}
+	return "auto-approve: " + strings.Join(cats, ", ")
+}
+
+// modeColor returns the colour used for the safety-mode line. When any
+// category is auto-approved, use yellow as a cautionary signal.
+func modeColor(autoWrite, autoGit, autoRun bool) string {
+	if autoWrite || autoGit || autoRun {
+		return yellow
+	}
+	return dim
 }
 
 // Assistant streams a chunk of assistant text. The text originates from the
@@ -394,11 +417,24 @@ type LiveView struct {
 	maxLines int
 	prev     int
 	started  bool
+	// wrap, when true, splits long logical lines across multiple physical rows
+	// instead of clipping them. The caller must use the wrapped variant for
+	// content where the full text must remain visible (e.g. reasoning).
+	wrap bool
 }
 
-// LiveView begins a live tail view with the given title.
+// LiveView begins a live tail view with the given title. Long lines are clipped
+// so each logical line occupies exactly one physical row; this keeps the
+// cursor-up redraw count exact for the file-write tail.
 func (u *UI) LiveView(title string, maxLines int) *LiveView {
 	return &LiveView{u: u, title: title, maxLines: maxLines}
+}
+
+// LiveViewWrapped begins a live tail view that wraps long logical lines onto
+// multiple physical rows. Use this when the user needs to see the full text
+// (e.g. chain-of-thought reasoning).
+func (u *UI) LiveViewWrapped(title string, maxLines int) *LiveView {
+	return &LiveView{u: u, title: title, maxLines: maxLines, wrap: true}
 }
 
 // livePrefix precedes each rendered tail line; livePrefixWidth is its width in
@@ -410,10 +446,11 @@ const (
 
 // Update redraws the view with the last maxLines lines of full.
 //
-// Every rendered line is expanded (tabs), stripped of cursor-moving control
-// characters and clipped to the terminal width, so exactly one physical row is
-// emitted per line. That keeps the cursor-up count used to redraw in place
-// exact even for long lines that would otherwise wrap and duplicate.
+// Each rendered line is expanded (tabs) and stripped of cursor-moving control
+// characters. In the default (non-wrapped) mode long lines are clipped so each
+// logical line occupies exactly one physical row, keeping the cursor-up count
+// exact. In wrapped mode logical lines are split across as many physical rows
+// as needed and the total row count is tracked for redraw.
 func (lv *LiveView) Update(full string) {
 	if !lv.u.tty {
 		return
@@ -433,11 +470,23 @@ func (lv *LiveView) Update(full string) {
 	// Leave a one-column margin so a full-width line cannot trigger the
 	// terminal's phantom auto-wrap, which would break the redraw count.
 	avail := width - livePrefixWidth - 1
-	for _, ln := range body {
-		ln = clip(sanitizeLine(ln, 4), avail)
-		fmt.Fprintln(lv.u.out, lv.u.paint(dim, livePrefix+ln))
+	if avail < 1 {
+		avail = 1
 	}
-	lv.prev = len(body)
+	totalRows := 0
+	for _, ln := range body {
+		ln = sanitizeLine(ln, 4)
+		if lv.wrap {
+			for _, row := range wrapLine(ln, avail) {
+				fmt.Fprintln(lv.u.out, lv.u.paint(dim, livePrefix+row))
+				totalRows++
+			}
+		} else {
+			fmt.Fprintln(lv.u.out, lv.u.paint(dim, livePrefix+clip(ln, avail)))
+			totalRows++
+		}
+	}
+	lv.prev = totalRows
 	lv.u.setLineStart(true)
 }
 
@@ -528,6 +577,24 @@ func (f *streamFilter) feed(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// wrapLine splits s into chunks of at most width runes. Empty strings produce
+// one empty chunk so blank lines remain visible.
+func wrapLine(s string, width int) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+	rs := []rune(s)
+	var out []string
+	for len(rs) > width {
+		out = append(out, string(rs[:width]))
+		rs = rs[width:]
+	}
+	if len(rs) > 0 || len(out) == 0 {
+		out = append(out, string(rs))
+	}
+	return out
 }
 
 // clip shortens s to at most max terminal cells (approximated by rune count),

@@ -41,7 +41,7 @@ func TestJSONModeReplyPseudoToolIsRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := llm.NewClient(srv.URL, "", "m", 0, 5*time.Second, true, "")
-	ag := New(cfg, client, tool.NewRegistry(root), ui.New())
+	ag := New(&cfg, client, tool.NewRegistry(root), ui.New())
 
 	if err := ag.Run(context.Background(), "say hello world"); err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestJSONModeReplyMixedWithRealTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := llm.NewClient(srv.URL, "", "m", 0, 5*time.Second, true, "")
-	ag := New(cfg, client, tool.NewRegistry(root), ui.New())
+	ag := New(&cfg, client, tool.NewRegistry(root), ui.New())
 
 	if err := ag.Run(context.Background(), "make hello.txt"); err != nil {
 		t.Fatal(err)
@@ -166,7 +166,7 @@ func TestJSONModeSecondTurnAfterFinalReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := llm.NewClient(srv.URL, "", "m", 0, 5*time.Second, true, "")
-	ag := New(cfg, client, tool.NewRegistry(root), ui.New())
+	ag := New(&cfg, client, tool.NewRegistry(root), ui.New())
 
 	if err := ag.Run(context.Background(), "do something"); err != nil {
 		t.Fatal(err)
@@ -219,7 +219,7 @@ func TestJSONModeEmptyReplyDoesNotStall(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := llm.NewClient(srv.URL, "", "m", 0, 5*time.Second, true, "")
-	ag := New(cfg, client, tool.NewRegistry(root), ui.New())
+	ag := New(&cfg, client, tool.NewRegistry(root), ui.New())
 
 	if err := ag.Run(context.Background(), "ask something"); err != nil {
 		t.Fatal(err)
@@ -270,7 +270,7 @@ func TestJSONModeEmptyArrayOnSecondTurnIsNotSwallowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := llm.NewClient(srv.URL, "", "m", 0, 5*time.Second, true, "")
-	ag := New(cfg, client, tool.NewRegistry(root), ui.New())
+	ag := New(&cfg, client, tool.NewRegistry(root), ui.New())
 
 	if err := ag.Run(context.Background(), "first"); err != nil {
 		t.Fatal(err)

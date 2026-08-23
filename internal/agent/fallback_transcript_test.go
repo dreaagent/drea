@@ -51,7 +51,7 @@ func TestTextRecoveredToolCallIsRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := llm.NewClient(srv.URL, "", "m", 0, 5*time.Second, false, "")
-	ag := New(cfg, client, tool.NewRegistry(root), ui.New())
+	ag := New(&cfg, client, tool.NewRegistry(root), ui.New())
 
 	if err := ag.Run(context.Background(), "make hello.txt"); err != nil {
 		t.Fatal(err)

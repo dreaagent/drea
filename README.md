@@ -110,10 +110,12 @@ file and an optional key file, in that order of precedence:
 | `--workdir` | `DREA_WORKDIR` | current dir | Workspace root the agent is confined to |
 | `--auto` | `DREA_AUTO_APPROVE` | off | Skip confirmation for commands/writes |
 | `--max-steps` | — | 50 | Max model turns per task |
-| `--temperature` | — | 0 | Sampling temperature |
-| `--top-p` | — | 0 (endpoint default) | Nucleus-sampling probability; omitting it keeps the endpoint default |
+| `--temperature` | — | 1 | Sampling temperature |
+| `--top-p` | — | 0.95 | Nucleus-sampling probability |
 | `--reasoning-effort` | `DREA_REASONING_EFFORT` | — (saved value) | Reasoning effort level: `low`, `medium` or `high`; empty means the endpoint default (persisted via `/save`) |
-| `--no-json-mode` | — | off | Disable the JSON strict JSON tool-call schema (`response_format`); only use with endpoints that do not support it |
+| `--no-json-mode` | — | off | Disable the strict JSON tool-call schema (`response_format`); only use with endpoints that do not support it |
+| `--json-format` | `DREA_JSON_FORMAT` | `json_schema` | `response_format` variant: `json_schema` (OpenAI) or `json_object` (llama.cpp/older servers) |
+| `--debug` | `DREA_DEBUG` | — | Dump raw request/response traffic to the given file |
 | `--verify` | `DREA_VERIFY` | — | Command run when a task completes; failures are fed back for self-correction |
 | `--verify-attempts` | `DREA_VERIFY_ATTEMPTS` | 3 | How many times a failing verify command is fed back before giving up |
 | `--checkpoint` | `DREA_CHECKPOINT` | off | Commit the workspace before each task (and measure `--verify` first) so a task that regresses it can be rolled back |
@@ -153,7 +155,10 @@ Flags and environment variables still override the saved values.
   than mistaking the turn for "done" and dropping back to the prompt. For models
   that still won't cooperate, `drea` asks the endpoint to constrain output to a
   strict JSON tool-call schema via `response_format` by default. Endpoints that
-  do not support it can opt out with `--no-json-mode`.
+  do not support it can opt out with `--no-json-mode`. In JSON mode, plain prose
+  replies and `reply` pseudo-tool messages are still streamed to the terminal as
+  they arrive, so you do not watch reasoning scroll by only to have the final
+  answer pop in all at once.
 - **Context management.** Long tasks no longer overflow the model window: the
   prompt-token count is tracked (using the endpoint's reported usage, or a
   fallback estimate) and once it exceeds `--context-tokens`, older turns are
@@ -176,6 +181,9 @@ The verify command is the only objective measure the harness has, so
 ```
 drea --checkpoint --verify 'go test ./...' --auto 'make the parser handle empty input'
 ```
+
+(`--auto` can be replaced with `--auto-write`, `--auto-git` and/or
+`--auto-run` to limit what is auto-approved.)
 
 Before the task, `drea` commits the workspace (so there is a ref to return to)
 and runs the verify command once to record where things stood. It then works,
@@ -206,6 +214,20 @@ many files or re-running a test after an edit is unaffected.
 **Cost.** Token usage reported by the endpoint is accumulated and printed after
 each task; `/usage` shows the session total. Nothing is estimated: an endpoint
 that reports no usage shows zeroes.
+
+### Prompt caching
+
+Some OpenAI-compatible gateways cache the prompt prefix when a stable
+`prompt_cache_key` is sent with each request. Enable it with
+`--prompt-cache-key <key>` or `DREA_PROMPT_CACHE_KEY`, and set it in a session
+with `/cache-key <key>`. The key is saved with `/save`.
+
+For a cache to hit, the prefix of the request must stay byte-identical across
+turns. `drea` keeps the conversation history stable, so caching works normally
+until the context budget is reached and automatic compaction summarizes older
+messages — after which a cache miss is expected. After each response, `drea`
+reports the cache status when the provider returns it (via headers such as
+`X-Cache-Status` or usage fields such as `prompt_cache_hit_tokens`).
 
 ### Isolated attempts (`--worktree`)
 
@@ -241,11 +263,18 @@ The command policy classifies each `run_command` the model wants to run so the
 harness can run unattended without blanket trust:
 
 - **deny** — matching commands are refused outright and never executed, *even
-  with `--auto`*. Deny always wins over allow.
+  with `--auto-run` or `--auto`*. Deny always wins over allow.
 - **allow** — matching commands run without a confirmation prompt (as if
   auto-approved), so routine safe commands (`go test`, `git status`, …) don't
   interrupt an unattended run.
-- otherwise the normal approval behaviour applies (prompt unless `--auto`).
+- otherwise the normal approval behaviour applies (prompt unless `--auto-run`
+  or `--auto`).
+
+Auto-approval can also be split by tool category. `--auto` still enables all
+mutating actions, but you can use `--auto-write`, `--auto-git` and `--auto-run`
+separately. For example, `--auto-write` lets the model edit files without
+interrupting you, while `run_command` still prompts (unless the command policy
+allows it).
 
 A built-in deny list always blocks clearly catastrophic commands (e.g.
 `rm -rf /`, `mkfs`, `dd of=/dev/…`, `shutdown`/`reboot`, fork bombs), regardless
@@ -259,6 +288,11 @@ drea --auto \
   --allow '^go (test|build|vet)\b' --allow '^git (status|diff|log|show)\b' \
   --deny '\b(curl|wget)\b' \
   "refactor the parser and keep the tests green"
+```
+
+```sh
+# Auto-approve file edits only; commands still prompt (or obey the policy).
+drea --auto-write "refactor the parser and keep the tests green"
 ```
 
 Inspect the effective policy in an interactive session with `/policy`. This is
@@ -327,7 +361,7 @@ tasks:
 | `/config` | Show the current configuration (the key is masked) |
 | `/model [name]` | Show or change the model |
 | `/host [url]` | Show or change the API base URL |
-| `/auto [on\|off]` | Show or toggle auto-approve |
+| `/auto [on\|off\|write\|git\|run]` | Show or toggle auto-approve (e.g. `/auto write on`) |
 | `/verify [cmd]` | Show or set the verify command (`/verify off` to clear) |
 | `/checkpoint [on\|off]` | Show or toggle per-task checkpointing |
 | `/usage` | Show token usage for this session |
@@ -340,6 +374,25 @@ tasks:
 | `/tools` | List the available tools |
 | `/exit` | Quit (also `/quit`, `exit`, Ctrl-D) |
 | `/multiline [on\|off]` | Toggle multi-line input (Enter starts a new line; Ctrl-D sends) |
+
+### Interactive reply continuation
+
+In an interactive session, when the assistant ends a turn with a `reply`
+(either alone or as the last tool call after real work), `drea` asks the model
+to classify that reply. It calls a small internal `classify_reply` tool with
+the original task and the reply, and the model answers either
+`CONTINUE_AUTONOMOUSLY` or `PAUSE_FOR_USER`.
+
+If the model classifies the reply as a status update or statement of intent
+(e.g. "GTK3 is available; let me create the GUI calculator."), `drea`
+automatically continues the task with a system instruction instead of making
+you press Enter after every progress report. If the reply asks a question,
+offers a choice, requests confirmation, or the model's intent is ambiguous,
+the chat pauses and waits for you as usual.
+
+This is bounded by `--reply-chain` (default 15, configurable with
+`DREA_REPLY_CHAIN` or `/save`), so a model that keeps chatting cannot loop
+forever without your attention.
 
 ## Use
 
@@ -365,11 +418,12 @@ drea --base-url http://localhost:8080/v1 --model my-local-model "…"
 
 ## Tools
 
-The model is given eleven tools, all confined to the workspace root:
+The model is given thirteen tools, all confined to the workspace root:
 
 | Tool | Mutating | Purpose |
 |------|----------|---------|
 | `read_file` | no | Read a text file (optional line offset/limit) |
+| `record_thoughts` | no | Persist reasoning or a plan into the conversation context |
 | `list_dir` | no | List a directory |
 | `search` | no | Regexp search across files (pure Go, optional glob) |
 | `git_inspect` | no | Read-only git inspection: status / diff / log / show |
@@ -380,9 +434,12 @@ The model is given eleven tools, all confined to the workspace root:
 | `git_init` | **yes** | Create a repository so work can be checkpointed |
 | `git_commit` | **yes** | Stage changes and create a checkpoint commit |
 | `git_rollback` | **yes** | `git reset --hard` to a ref (optionally clean untracked) |
+| `reply` | no | Send plain-text prose to the user (used to report status or finish a turn) |
 
-Mutating tools prompt for approval unless `--auto` is set. `run_command` is
-additionally subject to the allow/deny command policy (see above).
+Mutating tools prompt for approval unless their category is auto-approved
+(`--auto-write`, `--auto-git`, `--auto-run`) or the `--auto` master switch is
+set. `run_command` is additionally subject to the allow/deny command policy
+(see above).
 
 ### Reliable edits
 
@@ -454,6 +511,8 @@ internal/conventions/ discovery of the workspace's own instruction files
 - Project instructions are read only from regular files in the workspace root,
   never through symlinks, and are size-bounded.
 
-## Module path note
+## Module path
 
-The current `go.mod` declares `module drea` so the project builds cleanly from a directory named `drea` without a local `replace` directive. Before publishing as `github.com/dreaagent/drea`, update `go.mod` to `module github.com/dreaagent/drea` and change all imports from `drea/internal/...` to `github.com/dreaagent/drea/internal/...`, then verify with `go test ./...`.
+`go.mod` declares `module github.com/dreaagent/drea`, matching the import paths
+used throughout the source (`github.com/dreaagent/drea/internal/...`). The
+project builds cleanly as-is; no local `replace` directive is needed.

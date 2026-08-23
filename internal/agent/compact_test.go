@@ -61,7 +61,7 @@ func TestMaybeCompactPreservesStructure(t *testing.T) {
 	cfg.Persist = false
 	cfg.ContextTokens = 1 // force compaction
 	client := llm.NewClient(srv.URL, "", "m", 0, 5*time.Second, false, "")
-	ag := New(cfg, client, tool.NewRegistry(t.TempDir()), ui.New())
+	ag := New(&cfg, client, tool.NewRegistry(t.TempDir()), ui.New())
 
 	ag.messages = []llm.Message{{Role: llm.RoleSystem, Content: "SYSTEM-PROMPT"}}
 	for i := 0; i < 20; i++ {
@@ -89,7 +89,7 @@ func TestMaybeCompactNoOpUnderBudget(t *testing.T) {
 	cfg := config.Defaults(config.Saved{})
 	cfg.Persist = false
 	cfg.ContextTokens = 100000
-	ag := New(cfg, nil, tool.NewRegistry(t.TempDir()), ui.New())
+	ag := New(&cfg, nil, tool.NewRegistry(t.TempDir()), ui.New())
 	ag.messages = []llm.Message{
 		{Role: llm.RoleSystem, Content: "sys"},
 		{Role: llm.RoleUser, Content: "small"},
@@ -98,5 +98,35 @@ func TestMaybeCompactNoOpUnderBudget(t *testing.T) {
 	ag.maybeCompact(context.Background()) // must not call the (nil) client
 	if len(ag.messages) != before {
 		t.Fatal("compaction ran while under budget")
+	}
+}
+
+// TestMaybeCompactRunsWithCacheKey verifies that context compaction still
+// happens when a prompt cache key is configured. A cache miss after compaction
+// is expected; the point is that caching must work *before* compaction is
+// needed.
+func TestMaybeCompactRunsWithCacheKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, sse(
+			`{"choices":[{"delta":{"content":"SUMMARY"}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		))
+	}))
+	defer srv.Close()
+
+	cfg := config.Defaults(config.Saved{})
+	cfg.Persist = false
+	cfg.ContextTokens = 1 // force compaction
+	cfg.PromptCacheKey = "session-stable"
+	client := llm.NewClient(srv.URL, "", "m", 0, 5*time.Second, false, "")
+	ag := New(&cfg, client, tool.NewRegistry(t.TempDir()), ui.New())
+	for i := 0; i < 20; i++ {
+		ag.messages = append(ag.messages, llm.Message{Role: llm.RoleUser, Content: fmt.Sprintf("msg %d", i)})
+	}
+	before := len(ag.messages)
+	ag.maybeCompact(context.Background())
+	if len(ag.messages) >= before {
+		t.Fatalf("compaction did not run with prompt cache key set; still %d messages", len(ag.messages))
 	}
 }

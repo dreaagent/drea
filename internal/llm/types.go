@@ -53,19 +53,38 @@ type FunctionSpec struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
-// Usage reports token accounting when the endpoint provides it.
+// Usage reports token accounting when the endpoint provides it. Some providers
+// also break prompt tokens into cached and uncached portions.
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	// PromptCacheHitTokens is the number of prompt tokens served from cache.
+	PromptCacheHitTokens int `json:"prompt_cache_hit_tokens,omitempty"`
+	// PromptCacheMissTokens is the number of prompt tokens not served from cache.
+	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens,omitempty"`
 }
 
 // Result is the accumulated outcome of one streamed completion.
 type Result struct {
-	Content      string
-	ToolCalls    []ToolCall
-	FinishReason string
-	Usage        Usage
+	Content string
+	// ReasoningContent is the model's chain-of-thought tokens, streamed by
+	// reasoning-capable models (e.g. via reasoning_content). It is display-only
+	// and never included in the conversation messages.
+	ReasoningContent string
+	ToolCalls        []ToolCall
+	FinishReason     string
+	Usage            Usage
+	// CacheStatus is a short label for whether the prompt was served from cache:
+	// "hit", "miss", or empty when the provider did not say.
+	CacheStatus string
+	// CacheDetail carries the raw header/value that determined CacheStatus, so
+	// the user can see *how* the provider reported it.
+	CacheDetail string
+	// ReplyStreamed is true when a JSON-mode reply pseudo-tool was streamed to
+	// the UI as it arrived. The agent should not emit the same prose again when
+	// recording a reply-only turn.
+	ReplyStreamed bool
 }
 
 // request is the JSON body sent to /chat/completions.
@@ -79,6 +98,9 @@ type request struct {
 	Stream          bool            `json:"stream"`
 	StreamOptions   *streamOptions  `json:"stream_options,omitempty"`
 	ResponseFormat  *responseFormat `json:"response_format,omitempty"`
+	// PromptCacheKey is a non-standard extension used by some gateways to
+	// identify a prompt whose prefix should be cached across requests.
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 }
 
 type streamOptions struct {
@@ -242,8 +264,9 @@ func ReplyMessage(tc ToolCall) string {
 type streamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string          `json:"content"`
-			ToolCalls []toolCallDelta `json:"tool_calls"`
+			Content          string          `json:"content"`
+			ReasoningContent string          `json:"reasoning_content"`
+			ToolCalls        []toolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`

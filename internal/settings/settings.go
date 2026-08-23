@@ -25,7 +25,7 @@ type Settings struct {
 	// ContextTokens is the prompt-size budget above which history is compacted.
 	ContextTokens int `json:"context_tokens,omitempty"`
 	// JSONFormat selects the response_format variant sent to the endpoint.
-	// Valid values: json_schema, llamacpp, llamacpp-alt, json_object.
+	// Valid values: json_schema or json_object.
 	JSONFormat string `json:"json_format,omitempty"`
 	// TopP is the nucleus-sampling probability forwarded to the endpoint.
 	TopP float64 `json:"top_p,omitempty"`
@@ -35,6 +35,17 @@ type Settings struct {
 	// policy (see the config package). No secrets are ever stored here.
 	AllowCommands []string `json:"allow_commands,omitempty"`
 	DenyCommands  []string `json:"deny_commands,omitempty"`
+	// PromptCacheKey is a non-standard "prompt_cache_key" sent with requests.
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
+	// AutoWrite skips confirmation for write_file, edit_file and apply_patch.
+	AutoWrite bool `json:"auto_write,omitempty"`
+	// AutoGit skips confirmation for git_init, git_commit and git_rollback.
+	AutoGit bool `json:"auto_git,omitempty"`
+	// AutoRun skips confirmation for run_command.
+	AutoRun bool `json:"auto_run,omitempty"`
+	// ReplyChain is the maximum number of consecutive assistant replies
+	// auto-continued in interactive mode before pausing for user input.
+	ReplyChain int `json:"reply_chain,omitempty"`
 }
 
 // Path returns the settings file location (…/drea/settings.json under the

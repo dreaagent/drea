@@ -93,6 +93,78 @@ func TestLiveViewClipsLongLines(t *testing.T) {
 	}
 }
 
+// TestLiveViewWrappedRedrawCount verifies the cursor-up count on redraw equals
+// the number of physical rows drawn in the previous frame when lines wrap.
+func TestLiveViewWrappedRedrawCount(t *testing.T) {
+	var buf bytes.Buffer
+	u := &UI{out: &buf, tty: true, colour: false}
+	lv := u.LiveViewWrapped("reasoning", 10)
+
+	termWidth := termWidth()
+	if termWidth < 20 {
+		t.Skip("terminal too narrow for meaningful wrap test")
+	}
+
+	lv.Update("l1\nl2\nl3")
+	first := buf.String()
+	if strings.Contains(first, "\x1b[") && strings.Contains(first, "A\r") {
+		t.Fatalf("first frame should not move the cursor up: %q", first)
+	}
+
+	buf.Reset()
+	lv.Update("l1\nl2\nl3\nl4")
+	second := buf.String()
+	want := fmt.Sprintf("\x1b[%dA\r\x1b[J", 3)
+	if !strings.Contains(second, want) {
+		t.Fatalf("second frame should move up 3 rows (prev body), got %q", second)
+	}
+}
+
+// TestLiveViewWrapsLongLines ensures a very long line is wrapped onto multiple
+// physical rows instead of being clipped.
+func TestLiveViewWrapsLongLines(t *testing.T) {
+	var buf bytes.Buffer
+	u := &UI{out: &buf, tty: true, colour: false}
+	lv := u.LiveViewWrapped("reasoning", 10)
+
+	termWidth := termWidth()
+	if termWidth < 20 {
+		t.Skip("terminal too narrow for meaningful wrap test")
+	}
+
+	long := strings.Repeat("A", termWidth*3)
+	lv.Update(long)
+
+	prefixCount := 0
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if strings.HasPrefix(line, livePrefix) {
+			prefixCount++
+			if strings.Contains(line, "…") {
+				t.Errorf("wrapped line should not be clipped with ellipsis: %q", line)
+			}
+			if n := len([]rune(line)); n > termWidth {
+				t.Errorf("rendered line width %d exceeds terminal width %d: %q", n, termWidth, line)
+			}
+		}
+	}
+	if prefixCount < 2 {
+		t.Errorf("long line should wrap to at least 2 rows, got %d", prefixCount)
+	}
+}
+
+// TestWrapLine verifies the wrapping helper.
+func TestWrapLine(t *testing.T) {
+	if got := wrapLine("hello", 10); len(got) != 1 || got[0] != "hello" {
+		t.Errorf("short line: %v", got)
+	}
+	if got := wrapLine("hello world", 5); len(got) != 3 || got[0] != "hello" || got[1] != " worl" || got[2] != "d" {
+		t.Errorf("wrap 5: %v", got)
+	}
+	if got := wrapLine("", 5); len(got) != 1 || got[0] != "" {
+		t.Errorf("empty line: %v", got)
+	}
+}
+
 // TestStreamFilter verifies that streamed assistant text is stripped of escape
 // sequences and control characters while newlines and tabs survive.
 func TestStreamFilter(t *testing.T) {
