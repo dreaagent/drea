@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drea — a coding agent harness for your terminal</title>
+<meta name="description" content="Drea is a coding agent harness written in Go with zero dependencies. No Node, no Python, just source you can read and build. Fully open source under Apache License 2.0.">
+<meta name="theme-color" content="#F2EDE0">
+<link rel="icon" href="/favicons/favicon.ico" sizes="48x48">
+<link rel="icon" href="/favicons/android-chrome-192x192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="/favicons/apple-touch-icon.png">
+<link rel="manifest" href="/favicons/site.webmanifest">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Drea">
+<meta property="og:title" content="Drea — a coding agent harness for your terminal">
+<meta property="og:description" content="A minimalist, terminal-based AI agent harness written in Go with zero dependencies. No Node, no Python — just source you can read and build. Fully open source under Apache License 2.0.">
+<meta property="og:url" content="https://drea.run/">
+<meta property="og:image" content="https://drea.run/img/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Drea — a coding agent harness for your terminal">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Drea — a coding agent harness for your terminal">
+<meta name="twitter:description" content="A minimalist, AI agent harness written in Go with zero dependencies — no Node, no Python.">
+<meta name="twitter:image" content="https://drea.run/img/og-image.png">
+<link rel="stylesheet" href="/fonts/fonts.css">
+<link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+
+<nav id="nav">
+  <div class="wrap nav-inner">
+    <a class="logo" href="#top" aria-label="Drea home">
+      <img src="/img/logo.svg" alt="Drea logo" width="32" height="32" class="logo-img">
+      <span>Drea</span>
+    </a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="#source">Source</a>
+      <a href="https://github.com/dreaagent/drea" class="nav-cta" target="_blank" rel="noopener noreferrer"><img src="/img/github-mark.svg" alt="" class="nav-cta-icon">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<main id="top">
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-left">
+      <h1 class="brand">Drea<span class="dot">.</span></h1>
+      <p class="lede">A minimalist, terminal-based <strong>AI agent harness</strong> that lives in your shell. Written in Go with <strong>zero dependencies</strong> — no Node, no Python, no runtimes to install. It drives any OpenAI-compatible model through a reason–act loop with a small, auditable set of tools, and it prompts before every command and file write.</p>
+      <div class="install-block">
+        <div class="install-cmd">
+          <code>git clone https://github.com/dreaagent/drea.git && cd drea && go build -o drea ./cmd/drea</code>
+          <button class="copy-btn" data-copy="git clone https://github.com/dreaagent/drea.git && cd drea && go build -o drea ./cmd/drea" aria-label="Copy build command">
+            <span class="copy-label">Copy</span>
+          </button>
+        </div>
+        <div class="install-alt">or clone <code>https://github.com/dreaagent/drea</code> and build with <code>go build -o drea ./cmd/drea</code></div>
+      </div>
+      <div class="hero-actions">
+        <a href="#install" class="btn btn-primary">Build from source</a>
+        <a href="https://github.com/dreaagent/drea" class="btn btn-ghost" target="_blank" rel="noopener noreferrer"><img src="/img/github-mark.svg" alt="" class="btn-ghost-icon">View source ↗</a>
+      </div>
+    </div>
+    <div class="hero-right">
+      <div class="terminal" id="terminal-window">
+        <div class="terminal-header">
+          <span class="term-dot r"></span>
+          <span class="term-dot y"></span>
+          <span class="term-dot g"></span>
+          <span class="term-title">drea — bash — 100×30</span>
+          <button class="term-replay" id="term-replay" aria-label="Replay terminal demo">↻ replay</button>
+        </div>
+        <div class="terminal-body" id="terminal"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="facts">
+  <div class="wrap facts-inner">
+    <div class="fact"><span class="fact-key">deps</span><span class="fact-val">0</span></div>
+    <div class="fact"><span class="fact-key">release</span><span class="fact-val">v0.1.0-alpha.1</span></div>
+    <div class="fact"><span class="fact-key">tools</span><span class="fact-val">12</span></div>
+    <div class="fact"><span class="fact-key">license</span><span class="fact-val">Apache-2.0</span></div>
+    <div class="fact"><span class="fact-key">telemetry</span><span class="fact-val">none</span></div>
+    <div class="fact"><span class="fact-key">build</span><span class="fact-val">~7.9 MB</span></div>
+  </div>
+</div>
+
+<section id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">// why drea</div>
+      <h2 class="section-title">Small enough to own.</h2>
+      <p class="section-sub">No runtimes to install. No package managers to feed. No ghosts living in your shell. Just one codebase you can read, build, and run yourself.</p>
+    </div>
+    <div class="feature-grid">
+      <article class="feature">
+        <div class="feature-num">01</div>
+        <h3>Zero dependencies</h3>
+        <p>No Node.js. No Python. No npm install, no pip, no venv. Go's standard library does everything — HTTP, TLS, JSON and SSE streaming — so <code>go.mod</code> lists no <code>require</code>s.</p>
+      </article>
+      <article class="feature">
+        <div class="feature-num">02</div>
+        <h3>One static binary</h3>
+        <p>Fast startup, low memory, nothing to install at runtime. One file you can move, copy, ship, or forget about once you've built it.</p>
+      </article>
+      <article class="feature">
+        <div class="feature-num">03</div>
+        <h3>Confined by default</h3>
+        <p>Every file, search and command tool is restricted to a single workspace root; path traversal outside it is rejected.</p>
+      </article>
+      <article class="feature">
+        <div class="feature-num">04</div>
+        <h3>Approval by default</h3>
+        <p>Commands and file writes require your confirmation unless you pass <code>--auto</code>. Writes and edits are shown as a coloured diff before they are applied.</p>
+      </article>
+      <article class="feature">
+        <div class="feature-num">05</div>
+        <h3>Live file writes</h3>
+        <p>When the model writes or edits a file, the streamed content is rendered as a rolling tail of the last 10 lines — you watch the file being built.</p>
+      </article>
+      <article class="feature">
+        <div class="feature-num">06</div>
+        <h3>Any model, any endpoint</h3>
+        <p>Drives any OpenAI-compatible model — hosted or local, keyed or keyless. JSON-mode tool calling is on by default so even small models work.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">// install</div>
+      <h2 class="section-title">Build from source.</h2>
+      <p class="section-sub">There are no pre-built binaries yet. The only way to run Drea today is to compile it yourself — which is also the best way to trust it.</p>
+    </div>
+    <div class="install-grid">
+      <div class="method-card">
+        <h3>Source release</h3>
+        <p class="method-desc">Download the latest tagged source archive, extract it, and build with Go.</p>
+        <div class="method-cmd">
+          <code>curl -L https://github.com/dreaagent/drea/archive/refs/tags/v0.1.0-alpha.1.tar.gz | tar xz && cd drea-0.1.0-alpha.1 && go build ./cmd/drea</code>
+          <button class="copy-btn" data-copy="curl -L https://github.com/dreaagent/drea/archive/refs/tags/v0.1.0-alpha.1.tar.gz | tar xz && cd drea-0.1.0-alpha.1 && go build ./cmd/drea" aria-label="Copy source release build command"><span class="copy-label">Copy</span></button>
+        </div>
+      </div>
+      <div class="method-card">
+        <h3>Build &amp; install</h3>
+        <p class="method-desc">Requires Go 1.19+. Build the binary and optionally put it on your PATH.</p>
+        <div class="method-cmd">
+          <code>go build -o drea ./cmd/drea</code>
+          <button class="copy-btn" data-copy="go build -o drea ./cmd/drea" aria-label="Copy go build command"><span class="copy-label">Copy</span></button>
+        </div>
+      </div>
+      <div class="method-card">
+        <h3>Clone & build</h3>
+        <p class="method-desc">Full control. Clone the repository, read the code, and build the latest commit.</p>
+        <div class="method-cmd">
+          <code>git clone https://github.com/dreaagent/drea.git && cd drea && go build -o drea ./cmd/drea</code>
+          <button class="copy-btn" data-copy="git clone https://github.com/dreaagent/drea.git && cd drea && go build -o drea ./cmd/drea" aria-label="Copy clone and build command"><span class="copy-label">Copy</span></button>
+        </div>
+      </div>
+    </div>
+    <p class="install-note">Drea has been tested on <strong>Linux</strong> (Go 1.19, Debian 12). Set <code>DREA_API_KEY</code> (or <code>OPENAI_API_KEY</code>) and run <code>./drea</code> in any project — or point it at a local, keyless endpoint with <code>--base-url</code>. The API key stays out of your shell history and is never logged. No config files, no setup wizard, no ceremony.</p>
+  </div>
+</section>
+
+<section id="source">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">// source</div>
+      <h2 class="section-title">Read every line.<br>Run every build.</h2>
+      <p class="section-sub">Fully open source under the Apache License 2.0. This release is source-only — no binaries, no hidden steps, nothing phoned home.</p>
+      <p class="section-sub mono-note">module github.com/dreaagent/drea &nbsp;·&nbsp; go 1.19 &nbsp;·&nbsp; go.mod lists no require directives</p>
+    </div>
+    <div class="source-content">
+      <div class="source-left">
+        <div class="release-info">
+          <span class="release-label">Latest release</span>
+          <span class="release-tag">v0.1.0-alpha.1</span>
+          <span class="release-date">Alpha release</span>
+        </div>
+        <div class="platform-list">
+          <a class="platform" href="https://github.com/dreaagent/drea/archive/refs/tags/v0.1.0-alpha.1.tar.gz">
+            <span class="platform-name">v0.1.0-alpha.1.tar.gz <span class="arrow">↓</span></span>
+            <span class="platform-meta">source</span>
+          </a>
+          <a class="platform" href="https://github.com/dreaagent/drea/archive/refs/tags/v0.1.0-alpha.1.zip">
+            <span class="platform-name">v0.1.0-alpha.1.zip <span class="arrow">↓</span></span>
+            <span class="platform-meta">source</span>
+          </a>
+        </div>
+        <a href="https://github.com/dreaagent/drea" class="btn btn-ghost" target="_blank" rel="noopener noreferrer"><img src="/img/github-mark.svg" alt="" class="btn-ghost-icon">View on GitHub ↗</a>
+      </div>
+      <div class="source-right">
+        <div class="source-card">
+          <h4>Build notes</h4>
+          <p>Running <code>go build -o drea ./cmd/drea</code> on Linux produces a ~7.9 MB single binary with no runtime dependencies. Cross-platform builds for Windows, macOS, and BSD are planned.</p>
+          <div class="method-cmd">
+            <code>go build -o drea ./cmd/drea</code>
+            <button class="copy-btn" data-copy="go build -o drea ./cmd/drea" aria-label="Copy build command"><span class="copy-label">Copy</span></button>
+          </div>
+        </div>
+        <div class="source-card">
+          <h4>License</h4>
+          <p>Drea is released under the Apache License, Version 2.0. You may use, modify, and distribute it under those terms.</p>
+          <div class="license-note">Apache-2.0</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a class="logo" href="#top">
+          <img src="/img/logo.svg" alt="Drea logo" width="36" height="36" class="logo-img">
+          <span>Drea</span>
+        </a>
+        <p class="footer-tagline">A coding agent harness for your terminal. Written in Go, zero dependencies, fully open source.</p>
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/dreaagent/drea" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="https://github.com/dreaagent/drea/releases" target="_blank" rel="noopener noreferrer">Releases</a>
+        <a href="https://github.com/dreaagent/drea#readme" target="_blank" rel="noopener noreferrer">Docs</a>
+        <a href="https://github.com/dreaagent/drea/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">License</a>
+        <a href="https://github.com/dreaagent/drea/issues" target="_blank" rel="noopener noreferrer">Issues</a>
+        <a href="#top">Back to top ↑</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 Drea · Apache License 2.0</span>
+      <span>No telemetry · No tracking · <a href="https://github.com/dreaagent/drea" target="_blank" rel="noopener noreferrer">github.com/dreaagent/drea</a></span>
+    </div>
+  </div>
+</footer>
+
+<script src="/js/main.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>404 — Page not found · Drea</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="/favicons/favicon.ico" sizes="48x48">
+<link rel="icon" href="/favicons/android-chrome-192x192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="/favicons/apple-touch-icon.png">
+<link rel="stylesheet" href="/fonts/fonts.css">
+<link rel="stylesheet" href="/css/styles.css">
+<style>
+  .err404 {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 var(--gutter);
+  }
+  .err404-inner { text-align: center; max-width: 560px; }
+  .err404 .brand { font-size: clamp(72px, 12vw, 120px); margin-bottom: 16px; }
+  .err404 h1 { font-family: 'Fraunces', serif; font-weight: 500; font-size: clamp(28px, 4vw, 40px); letter-spacing: -0.02em; color: var(--ink); margin-bottom: 12px; }
+  .err404 p { color: var(--ink-soft); font-size: 17px; line-height: 1.6; margin-bottom: 32px; }
+  .err404 .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<main class="err404">
+  <div class="err404-inner">
+    <h1 class="brand">404<span class="dot">.</span></h1>
+    <h1>This page went off-script.</h1>
+    <p>The page you’re looking for doesn’t exist — it may have been moved, renamed, or never written.</p>
+    <div class="actions">
+      <a href="/" class="btn btn-primary">Back to home</a>
+      <a href="https://github.com/dreaagent/drea" class="btn btn-ghost" target="_blank" rel="noopener noreferrer"><img src="/img/github-mark.svg" alt="" class="btn-ghost-icon">GitHub ↗</a>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>
